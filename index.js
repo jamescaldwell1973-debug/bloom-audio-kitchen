@@ -13,7 +13,12 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 const app = express();
 app.use(express.json());
 
-const ttsClient = new TextToSpeechClient();
+// This tells Google to use the actual JSON data from your environment variable
+const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+
+const ttsClient = new TextToSpeechClient({
+  credentials
+});
 
 // 3. THE KITCHEN LOGIC
 app.post('/api/render', async (req, res) => {
@@ -71,3 +76,4 @@ app.post('/api/render', async (req, res) => {
 });
 
 module.exports = app;
+
