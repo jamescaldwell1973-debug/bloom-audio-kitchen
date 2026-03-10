@@ -5,10 +5,7 @@ const { TextToSpeechClient } = require('@google-cloud/text-to-speech');
 const fs = require('fs');
 const path = require('path');
 
-// THE CRITICAL FIX: Point ffprobe to the ffmpeg binary 
-// (Most modern ffmpeg-static builds include both or handle both via this path)
 ffmpeg.setFfmpegPath(ffmpegPath);
-ffmpeg.setFfprobePath(ffmpegPath); 
 
 const app = express();
 app.use(express.json());
@@ -35,17 +32,27 @@ app.post('/api/render', async (req, res) => {
     }
 
     const outputName = path.join('/tmp', `master_${Date.now()}.mp3`);
+    
+    // MANUAL COMMAND: We build the command from scratch to avoid the 'ffprobe' call
     let command = ffmpeg();
 
     tempFiles.forEach((file, index) => {
-      command = command.input(file);
+      command.input(file);
+      // Insert silence if needed
       if (index < tempFiles.length - 1 && parseFloat(pause) > 0) {
-        command = command.input('anullsrc=cl=mono:r=44100')
-                         .inputOptions(['-f lavfi', `-t ${pause}`]);
+        command.input(`anullsrc=channel_layout=mono:sample_rate=44100:duration=${pause}`).inputFormat('lavfi');
       }
     });
 
     command
+      .complexFilter([
+        // This tells ffmpeg to just join the streams without checking their metadata first
+        {
+          filter: 'concat',
+          options: { n: (parseFloat(pause) > 0 ? tempFiles.length * 2 - 1 : tempFiles.length), v: 0, a: 1 },
+          out: 'out'
+        }
+      ])
       .on('error', (err) => {
         console.error('FFmpeg Error:', err);
         if (!res.headersSent) res.status(500).json({ error: err.message });
@@ -56,10 +63,11 @@ app.post('/api/render', async (req, res) => {
           audioUrl: `data:audio/mp3;base64,${audioBuffer.toString('base64')}`,
           message: isPreview ? "Preview ready" : "Master Cooked!" 
         });
+        // Cleanup
         tempFiles.forEach(f => fs.existsSync(f) && fs.unlinkSync(f));
         if (fs.existsSync(outputName)) fs.unlinkSync(outputName);
       })
-      .mergeToFile(outputName);
+      .save(outputName); // Use .save() instead of .mergeToFile() to stay manual
 
   } catch (err) {
     if (!res.headersSent) res.status(500).json({ error: err.message });
