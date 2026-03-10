@@ -6,21 +6,23 @@ const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
-// NOW you can use ffmpeg because it was defined above
+// 1. SETUP: Now that 'ffmpeg' and 'ffmpegPath' are defined above, we can link them
 ffmpeg.setFfmpegPath(ffmpegPath);
 
+// 2. APP CONFIG
 const app = express();
 app.use(express.json());
 
 const ttsClient = new TextToSpeechClient();
 
+// 3. THE KITCHEN LOGIC
 app.post('/api/render', async (req, res) => {
   const { script, speed, pause, isPreview, tagName } = req.body;
   const lines = script.split('\n').filter(l => l.trim());
   const tempFiles = [];
 
   try {
-    // 1. Generate individual MP3s for each line
+    // Generate Audio for each line
     for (let i = 0; i < lines.length; i++) {
       const [response] = await ttsClient.synthesizeSpeech({
         input: { text: lines[i] },
@@ -33,13 +35,12 @@ app.post('/api/render', async (req, res) => {
       tempFiles.push(fileName);
     }
 
-    // 2. Stitch lines together with silence
+    // Stitch with FFmpeg
     const outputName = path.join('/tmp', `master_${Date.now()}.mp3`);
     let command = ffmpeg();
 
     tempFiles.forEach((file, index) => {
       command = command.input(file);
-      // Add silence input (lavfi) between lines
       if (index < tempFiles.length - 1) {
         command = command.input('anullsrc=channel_layout=mono:sample_rate=44100')
                          .inputOptions(['-f lavfi', `-t ${pause}`]);
@@ -53,17 +54,12 @@ app.post('/api/render', async (req, res) => {
       })
       .on('end', async () => {
         const audioBuffer = fs.readFileSync(outputName);
-        
         if (isPreview) {
-          // Send back to Sidebar for "Tasting"
-          res.json({ audioUrl: `data:audio/mp3;base64,${audioBuffer.toString('base64')}` });
+          res.json({ audioUrl: audioBuffer.toString('base64') });
         } else {
-          // This is where "Make It Happen" saves to Drive
-          // For now, returning base64 so you can verify it worked
-          res.json({ message: "Master Cooked!", audioUrl: `data:audio/mp3;base64,${audioBuffer.toString('base64')}` });
+          res.json({ message: "Master Cooked!", audioUrl: audioBuffer.toString('base64') });
         }
-        
-        // Cleanup temp files
+        // Cleanup
         tempFiles.forEach(f => fs.existsSync(f) && fs.unlinkSync(f));
         fs.existsSync(outputName) && fs.unlinkSync(outputName);
       })
@@ -74,6 +70,4 @@ app.post('/api/render', async (req, res) => {
   }
 });
 
-
 module.exports = app;
-
