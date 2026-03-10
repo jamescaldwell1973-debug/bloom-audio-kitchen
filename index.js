@@ -1,6 +1,7 @@
 const express = require('express');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
+const ffprobePath = require('@ffprobe-installer/ffprobe').path;
 const { TextToSpeechClient } = require('@google-cloud/text-to-speech');
 const { google } = require('googleapis');
 const fs = require('fs');
@@ -8,7 +9,7 @@ const path = require('path');
 
 // 1. SETUP: Link FFmpeg binary
 ffmpeg.setFfmpegPath(ffmpegPath);
-
+ffmpeg.setFfprobePath(ffprobePath);
 // 2. APP CONFIG
 const app = express();
 app.use(express.json());
@@ -85,3 +86,4 @@ app.post('/api/render', async (req, res) => {
 });
 
 module.exports = app;
+
