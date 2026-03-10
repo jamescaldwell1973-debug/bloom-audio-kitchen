@@ -1,13 +1,15 @@
-const ffmpegPath = require('ffmpeg-static');
-ffmpeg.setFfmpegPath(ffmpegPath);
 const express = require('express');
 const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('ffmpeg-static');
 const { TextToSpeechClient } = require('@google-cloud/text-to-speech');
 const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
-const app = express();
 
+// NOW you can use ffmpeg because it was defined above
+ffmpeg.setFfmpegPath(ffmpegPath);
+
+const app = express();
 app.use(express.json());
 
 const ttsClient = new TextToSpeechClient();
@@ -74,3 +76,4 @@ app.post('/api/render', async (req, res) => {
 
 
 module.exports = app;
+
