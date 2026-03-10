@@ -1,3 +1,5 @@
+const ffmpegPath = require('ffmpeg-static');
+ffmpeg.setFfmpegPath(ffmpegPath);
 const express = require('express');
 const ffmpeg = require('fluent-ffmpeg');
 const { TextToSpeechClient } = require('@google-cloud/text-to-speech');
@@ -69,5 +71,6 @@ app.post('/api/render', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 module.exports = app;
