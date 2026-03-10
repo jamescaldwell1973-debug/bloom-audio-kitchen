@@ -1,30 +1,24 @@
 const express = require('express');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
-const ffprobePath = require('@ffprobe-installer/ffprobe').path;
 const { TextToSpeechClient } = require('@google-cloud/text-to-speech');
-const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
-// 1. SETUP: Link FFmpeg binary
+// 1. SETUP: Only link the main FFmpeg binary
 ffmpeg.setFfmpegPath(ffmpegPath);
-ffmpeg.setFfprobePath(ffprobePath);
-// 2. APP CONFIG
+
 const app = express();
 app.use(express.json());
 
-// Parse credentials and fix the newline issue for Vercel
+// Parse credentials and fix the newline issue
 const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS);
 credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
-
 const ttsClient = new TextToSpeechClient({ credentials });
 
 // 3. THE KITCHEN LOGIC
 app.post('/api/render', async (req, res) => {
-  const { script, speed, pause, isPreview, tagName } = req.body;
-  
-  // Clean the script and split into lines
+  const { script, speed, pause, isPreview } = req.body;
   const lines = script.split('\n').filter(l => l.trim());
   const tempFiles = [];
 
@@ -42,15 +36,14 @@ app.post('/api/render', async (req, res) => {
       tempFiles.push(fileName);
     }
 
-    // Stitching Process
     const outputName = path.join('/tmp', `master_${Date.now()}.mp3`);
     let command = ffmpeg();
 
     tempFiles.forEach((file, index) => {
       command = command.input(file);
-      // Inject silence between lines if it's not the last line
-      if (index < tempFiles.length - 1) {
-        command = command.input('anullsrc=channel_layout=mono:sample_rate=44100')
+      if (index < tempFiles.length - 1 && parseFloat(pause) > 0) {
+        // Simple silence injection that doesn't require ffprobe
+        command = command.input('anullsrc=cl=mono:r=44100')
                          .inputOptions(['-f lavfi', `-t ${pause}`]);
       }
     });
@@ -58,32 +51,25 @@ app.post('/api/render', async (req, res) => {
     command
       .on('error', (err) => {
         console.error('FFmpeg Error:', err);
-        res.status(500).json({ error: err.message });
+        if (!res.headersSent) res.status(500).json({ error: err.message });
       })
       .on('end', () => {
-        if (!fs.existsSync(outputName)) {
-          return res.status(500).json({ error: "Output file not found" });
-        }
-
         const audioBuffer = fs.readFileSync(outputName);
-        const base64Audio = audioBuffer.toString('base64');
-        
         res.json({ 
-          audioUrl: `data:audio/mp3;base64,${base64Audio}`,
+          audioUrl: `data:audio/mp3;base64,${audioBuffer.toString('base64')}`,
           message: isPreview ? "Preview ready" : "Master Cooked!" 
         });
 
-        // Cleanup: remove temporary files to keep the server light
+        // Cleanup
         tempFiles.forEach(f => fs.existsSync(f) && fs.unlinkSync(f));
-        fs.existsSync(outputName) && fs.unlinkSync(outputName);
+        if (fs.existsSync(outputName)) fs.unlinkSync(outputName);
       })
       .mergeToFile(outputName);
 
   } catch (err) {
     console.error('Kitchen Error:', err);
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
 module.exports = app;
-
