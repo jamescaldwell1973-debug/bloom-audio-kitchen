@@ -6,28 +6,29 @@ const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
-// 1. SETUP: Now that 'ffmpeg' and 'ffmpegPath' are defined above, we can link them
+// 1. SETUP: Link FFmpeg binary
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 // 2. APP CONFIG
 const app = express();
 app.use(express.json());
 
-// This tells Google to use the actual JSON data from your environment variable
+// Parse credentials and fix the newline issue for Vercel
 const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
 
-const ttsClient = new TextToSpeechClient({
-  credentials
-});
+const ttsClient = new TextToSpeechClient({ credentials });
 
 // 3. THE KITCHEN LOGIC
 app.post('/api/render', async (req, res) => {
   const { script, speed, pause, isPreview, tagName } = req.body;
+  
+  // Clean the script and split into lines
   const lines = script.split('\n').filter(l => l.trim());
   const tempFiles = [];
 
   try {
-    // Generate Audio for each line
+    // Generate individual Audio for each line
     for (let i = 0; i < lines.length; i++) {
       const [response] = await ttsClient.synthesizeSpeech({
         input: { text: lines[i] },
@@ -40,12 +41,13 @@ app.post('/api/render', async (req, res) => {
       tempFiles.push(fileName);
     }
 
-    // Stitch with FFmpeg
+    // Stitching Process
     const outputName = path.join('/tmp', `master_${Date.now()}.mp3`);
     let command = ffmpeg();
 
     tempFiles.forEach((file, index) => {
       command = command.input(file);
+      // Inject silence between lines if it's not the last line
       if (index < tempFiles.length - 1) {
         command = command.input('anullsrc=channel_layout=mono:sample_rate=44100')
                          .inputOptions(['-f lavfi', `-t ${pause}`]);
@@ -57,23 +59,29 @@ app.post('/api/render', async (req, res) => {
         console.error('FFmpeg Error:', err);
         res.status(500).json({ error: err.message });
       })
-      .on('end', async () => {
-        const audioBuffer = fs.readFileSync(outputName);
-        if (isPreview) {
-          res.json({ audioUrl: audioBuffer.toString('base64') });
-        } else {
-          res.json({ message: "Master Cooked!", audioUrl: audioBuffer.toString('base64') });
+      .on('end', () => {
+        if (!fs.existsSync(outputName)) {
+          return res.status(500).json({ error: "Output file not found" });
         }
-        // Cleanup
+
+        const audioBuffer = fs.readFileSync(outputName);
+        const base64Audio = audioBuffer.toString('base64');
+        
+        res.json({ 
+          audioUrl: `data:audio/mp3;base64,${base64Audio}`,
+          message: isPreview ? "Preview ready" : "Master Cooked!" 
+        });
+
+        // Cleanup: remove temporary files to keep the server light
         tempFiles.forEach(f => fs.existsSync(f) && fs.unlinkSync(f));
         fs.existsSync(outputName) && fs.unlinkSync(outputName);
       })
       .mergeToFile(outputName);
 
   } catch (err) {
+    console.error('Kitchen Error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
 module.exports = app;
-
