@@ -20,6 +20,7 @@ app.post('/api/render', async (req, res) => {
   const tempFiles = [];
 
   try {
+    // 1. Generate the Speech Lines
     for (let i = 0; i < lines.length; i++) {
       const [response] = await ttsClient.synthesizeSpeech({
         input: { text: lines[i] },
@@ -31,28 +32,34 @@ app.post('/api/render', async (req, res) => {
       tempFiles.push(fileName);
     }
 
-    const outputName = path.join('/tmp', `master_${Date.now()}.mp3`);
-    
-    // MANUAL COMMAND: We build the command from scratch to avoid the 'ffprobe' call
-    let command = ffmpeg();
+    // 2. Generate a "Physical" Silence File (No lavfi needed)
+    const silenceFile = path.join('/tmp', 'silence.mp3');
+    await new Promise((resolve, reject) => {
+      // Use the first line as a template to ensure sample rates match
+      ffmpeg(tempFiles[0])
+        .audioFilters(`apause=d=${pause}`) 
+        .outputOptions(['-t', pause, '-f mp3'])
+        .on('end', resolve)
+        .on('error', reject)
+        .save(silenceFile);
+    });
 
+    // 3. Assemble the Playlist
+    const outputName = path.join('/tmp', `master_${Date.now()}.mp3`);
+    let command = ffmpeg();
+    
+    // Create the order: Line -> Silence -> Line -> Silence
+    const playlist = [];
     tempFiles.forEach((file, index) => {
-      command.input(file);
-      // Insert silence if needed
+      playlist.push(file);
       if (index < tempFiles.length - 1 && parseFloat(pause) > 0) {
-        command.input(`anullsrc=channel_layout=mono:sample_rate=44100:duration=${pause}`).inputFormat('lavfi');
+        playlist.push(silenceFile);
       }
     });
 
+    playlist.forEach(f => command.input(f));
+
     command
-      .complexFilter([
-        // This tells ffmpeg to just join the streams without checking their metadata first
-        {
-          filter: 'concat',
-          options: { n: (parseFloat(pause) > 0 ? tempFiles.length * 2 - 1 : tempFiles.length), v: 0, a: 1 },
-          out: 'out'
-        }
-      ])
       .on('error', (err) => {
         console.error('FFmpeg Error:', err);
         if (!res.headersSent) res.status(500).json({ error: err.message });
@@ -63,13 +70,15 @@ app.post('/api/render', async (req, res) => {
           audioUrl: `data:audio/mp3;base64,${audioBuffer.toString('base64')}`,
           message: isPreview ? "Preview ready" : "Master Cooked!" 
         });
-        // Cleanup
-        tempFiles.forEach(f => fs.existsSync(f) && fs.unlinkSync(f));
-        if (fs.existsSync(outputName)) fs.unlinkSync(outputName);
+        // Full Cleanup
+        [...tempFiles, silenceFile, outputName].forEach(f => {
+          if (fs.existsSync(f)) fs.unlinkSync(f);
+        });
       })
-      .save(outputName); // Use .save() instead of .mergeToFile() to stay manual
+      .mergeToFile(outputName, '/tmp'); // Standard merge
 
   } catch (err) {
+    console.error('Final Catch Error:', err);
     if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
